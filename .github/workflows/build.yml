@@ -1,5 +1,8 @@
 name: Build Termicro APK
 
+permissions:
+  contents: write
+
 on:
   push:
     branches: [ main ]
