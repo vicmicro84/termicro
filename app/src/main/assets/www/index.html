@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Termicro</title>
+<style>
+:root{--bg:#fafafa;--panel:#ffffff;--text:#1a1a1a;--accent:#2563eb;--muted:#6b7280;--border:#e2e2e2;--key:#f0f0f0;--prompt:#16a34a}
+:root[data-theme="dark"]{--bg:#121212;--panel:#1b1b1b;--text:#e8e8e8;--accent:#60a5fa;--muted:#9ca3af;--border:#333;--key:#262626;--prompt:#4ade80}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;font-family:"Courier New",monospace;background:var(--bg);color:var(--text)}
+#app{display:flex;flex-direction:column;height:100%;padding-top:env(safe-area-inset-top,0)}
+#top{display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--panel);border-bottom:1px solid var(--border)}
+#top button{background:none;border:none;font-size:20px;color:var(--text);cursor:pointer;padding:4px 8px}
+#top .title{flex:1;font-size:14px;font-weight:bold}
+#menu{position:fixed;top:0;left:0;height:100%;width:230px;background:var(--panel);border-right:1px solid var(--border);
+  transform:translateX(-100%);transition:.2s;z-index:50;padding-top:env(safe-area-inset-top,0);overflow-y:auto}
+#menu.open{transform:translateX(0)}
+#menu a{display:block;padding:12px 16px;color:var(--text);text-decoration:none;font-size:14px;border-bottom:1px solid var(--border)}
+#menu a:active{background:var(--key)}
+#overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.3);z-index:40}
+#overlay.show{display:block}
+#tabs{display:flex;overflow-x:auto;background:var(--panel);border-bottom:1px solid var(--border)}
+#tabs .tab{padding:6px 10px;font-size:12px;white-space:nowrap;border-right:1px solid var(--border);cursor:pointer;color:var(--muted)}
+#tabs .tab.active{color:var(--accent);font-weight:bold}
+#tabs .tab span{margin-left:6px;color:var(--muted)}
+#screen{flex:1;overflow-y:auto;padding:10px;font-size:13px;line-height:1.4;-webkit-user-select:text;user-select:text}
+#screen div{white-space:pre-wrap;word-break:break-word}
+.out{color:var(--text)}
+.err{color:#dc2626}
+.sys{color:var(--muted)}
+.pr{color:var(--prompt);font-weight:bold}
+#inputRow{display:flex;align-items:center;padding:6px 10px;background:var(--panel);border-top:1px solid var(--border)}
+#inputRow .pr{margin-right:6px;font-size:13px}
+#cmd{flex:1;background:none;border:none;outline:none;color:var(--text);font-family:inherit;font-size:14px}
+#keys{display:flex;overflow-x:auto;background:var(--key);border-top:1px solid var(--border);padding:4px env(safe-area-inset-left,0) calc(4px + env(safe-area-inset-bottom,0))}
+#keys button{flex:0 0 auto;margin:2px;padding:6px 10px;font-size:13px;background:var(--panel);border:1px solid var(--border);border-radius:5px;color:var(--text)}
+#bar{height:3px;background:var(--accent);width:0%}
+#fileInput{display:none}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="top">
+    <button onclick="toggleMenu()">&#9776;</button>
+    <div class="title">Termicro</div>
+    <button onclick="newSession()" title="New terminal">&#10133;</button>
+    <button onclick="toggleTheme()">&#9728;</button>
+  </div>
+  <div id="bar"></div>
+  <div id="tabs"></div>
+  <div id="screen"></div>
+  <div id="inputRow">
+    <span class="pr" id="promptLabel">~$</span>
+    <input id="cmd" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="type a command, or 'help'">
+  </div>
+  <div id="keys">
+    <button onclick="insertKey('Escape')">ESC</button>
+    <button onclick="insertKey('Tab')">TAB</button>
+    <button onclick="insertKey('Ctrl')">CTRL</button>
+    <button onclick="insertKey('Alt')">ALT</button>
+    <button onclick="insertText('|')">|</button>
+    <button onclick="insertText('/')">/</button>
+    <button onclick="insertText('-')">-</button>
+    <button onclick="insertText('~')">~</button>
+    <button onclick="insertText('>')">></button>
+    <button onclick="insertText('*')">*</button>
+    <button onclick="histNav(-1)">&#9650;</button>
+    <button onclick="histNav(1)">&#9660;</button>
+    <button onclick="copySel()">&#128203;copy</button>
+    <button onclick="pasteClip()">&#128190;paste</button>
+    <button onclick="document.getElementById('fileInput').click()">&#128206;upload</button>
+  </div>
+</div>
+<div id="overlay" onclick="toggleMenu()"></div>
+<div id="menu">
+  <a onclick="runCmd('help');toggleMenu()">Help / All Commands</a>
+  <a onclick="newSession();toggleMenu()">New Terminal Session</a>
+  <a onclick="runCmd('clear');toggleMenu()">Clear Screen</a>
+  <a onclick="toggleTheme();toggleMenu()">Toggle Light/Dark</a>
+  <a onclick="runCmd('pkg update');toggleMenu()">Check for Updates</a>
+  <a onclick="runCmd('pkg list');toggleMenu()">Available Packages</a>
+  <a onclick="document.getElementById('fileInput').click();toggleMenu()">Upload File</a>
+  <a onclick="runCmd('history');toggleMenu()">Command History</a>
+  <a onclick="wakeLockToggle();toggleMenu()">Keep Screen Awake</a>
+  <a onclick="runCmd('about');toggleMenu()">About Droid Terminal</a>
+  <a onclick="closeSession(current);toggleMenu()">Close This Session</a>
+</div>
+<input type="file" id="fileInput" onchange="handleUpload(event)">
+<script>
+const pkgDB={python:'45MB',nodejs:'38MB',git:'12MB','openjdk-17':'180MB',gradle:'124MB','android-sdk':'650MB','android-studio':'980MB','gh':'15MB',cmake:'25MB',ninja:'2MB',clang:'90MB',make:'1MB',vim:'3MB',curl:'1MB',wget:'1MB',ruby:'20MB',rust:'60MB'};
+let sessions=[], current=0, wakeLock=null;
+function newSession(){
+  const id=sessions.length?Math.max(...sessions.map(s=>s.id))+1:1;
+  sessions.push({id,history:[],hIdx:-1,lines:[],cwd:'~',files:['Documents','Downloads','uploads']});
+  current=sessions.length-1;
+  renderTabs();renderScreen();
+  boot();
+}
+function closeSession(i){
+  if(sessions.length===1){print('Cannot close the last session.','err');return;}
+  sessions.splice(i,1);
+  current=Math.max(0,i-1);
+  renderTabs();renderScreen();
+}
+function switchSession(i){current=i;renderTabs();renderScreen();}
+function renderTabs(){
+  const t=document.getElementById('tabs');t.innerHTML='';
+  sessions.forEach((s,i)=>{
+    const d=document.createElement('div');
+    d.className='tab'+(i===current?' active':'');
+    d.innerHTML='Session '+s.id+' <span onclick="event.stopPropagation();closeSession('+i+')">&#10005;</span>';
+    d.onclick=()=>switchSession(i);
+    t.appendChild(d);
+  });
+}
+function sess(){return sessions[current];}
+function print(txt,cls){sess().lines.push({txt,cls:cls||'out'});renderScreen();}
+function renderScreen(){
+  const s=document.getElementById('screen');
+  s.innerHTML=sess().lines.map(l=>'<div class="'+l.cls+'">'+escapeHtml(l.txt)+'</div>').join('');
+  document.getElementById('promptLabel').textContent=sess().cwd+'$';
+  s.scrollTop=s.scrollHeight;
+}
+function escapeHtml(t){return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function setBar(p){document.getElementById('bar').style.width=p+'%';}
+function progress(label,ms,done){
+  let p=0;const line={txt:'',cls:'sys'};sess().lines.push(line);
+  const t=setInterval(()=>{
+    p+=Math.max(1,Math.random()*18);if(p>100)p=100;
+    setBar(p);
+    const blocks=Math.round(p/5);
+    line.txt=label+' ['+'#'.repeat(blocks)+'.'.repeat(20-blocks)+'] '+Math.round(p)+'%';
+    renderScreen();
+    if(p>=100){clearInterval(t);setBar(0);done&&done();}
+  },ms/12);
+}
+function boot(){
+  print('Termicro Setup v1.0','sys');
+  print('The Script: fetching main tool chain (core, shell, package manager)...','sys');
+  progress('Downloading core tools',1400,()=>{
+    print('Core tools installed.','sys');
+    print('The Script: checking for updates and upgrades...','sys');
+    progress('Checking updates',1000,()=>{
+      print('All packages up to date. Type "help" to see every available command.','sys');
+      print('','out');
+    });
+  });
+}
+function histNav(dir){
+  const s=sess();if(!s.history.length)return;
+  s.hIdx=Math.min(s.history.length-1,Math.max(0,s.hIdx+ (dir<0?1:-1)));
+  if(dir<0) s.hIdx=Math.min(s.history.length-1,(s.hIdx<0?0:s.hIdx));
+  document.getElementById('cmd').value=s.history[s.history.length-1-s.hIdx]||'';
+}
+function insertText(t){
+  const el=document.getElementById('cmd');
+  const p=el.selectionStart||el.value.length;
+  el.value=el.value.slice(0,p)+t+el.value.slice(p);
+  el.focus();el.selectionStart=el.selectionEnd=p+t.length;
+}
+function insertKey(k){print('['+k+']','sys');}
+function copySel(){
+  const t=window.getSelection().toString()||document.getElementById('cmd').value;
+  navigator.clipboard&&navigator.clipboard.writeText(t).then(()=>print('Copied to clipboard.','sys')).catch(()=>print('Copy failed.','err'));
+}
+function pasteClip(){
+  navigator.clipboard&&navigator.clipboard.readText().then(t=>insertText(t)).catch(()=>print('Paste failed (clipboard permission).','err'));
+}
+function handleUpload(e){
+  const f=e.target.files[0];if(!f)return;
+  sess().files.push(f.name);
+  print('Uploaded: '+f.name+' ('+Math.round(f.size/1024)+'KB) -> ~/uploads/','sys');
+  e.target.value='';
+}
+function wakeLockToggle(){
+  if('wakeLock' in navigator){
+    if(!wakeLock){navigator.wakeLock.request('screen').then(w=>{wakeLock=w;print('Screen will stay awake.','sys');});}
+    else{wakeLock.release();wakeLock=null;print('Screen wake-lock released.','sys');}
+  } else print('Wake Lock not supported on this browser.','err');
+}
+function toggleMenu(){document.getElementById('menu').classList.toggle('open');document.getElementById('overlay').classList.toggle('show');}
+function toggleTheme(){
+  const r=document.documentElement;
+  r.getAttribute('data-theme')==='dark'?r.removeAttribute('data-theme'):r.setAttribute('data-theme','dark');
+}
+const HELP=`Available commands:
+  help                 show this list
+  clear                clear the screen
+  echo <text>          print text
+  pwd                  show current directory
+  cd <dir>             change directory (simulated)
+  ls                   list files
+  mkdir <name>         create a folder
+  touch <name>         create a file
+  rm <name>            remove a file/folder
+  cat <name>           show file contents
+  whoami / uname -a    system info
+  date                 current date/time
+  history              show command history
+  neofetch             device/software summary
+  pkg list             list installable packages
+  pkg install <name>   install a package (simulated download)
+  pkg update|upgrade   check/apply updates
+  pkg uninstall <name> remove a package
+  git clone <url>      clone a repo (simulated)
+  git init|status      git basics (simulated)
+  javac / java -version   Java SDK tools (after install)
+  gradle -v / gradle build   Gradle tools (after install)
+  sdkmanager --list    Android SDK components (after install)
+  build-apk            run a simulated Gradle APK build
+  -<your request>      type a plain request, no command syntax needed. It tries to DO it first
+                        (open/list/make/delete a folder, show a file, etc.) using the commands
+                        above, and only falls back to writing starter code if it's a coding ask.
+                        Examples: -open Downloads folder   -list Documents   -make a folder called notes
+  about                about this app
+  exit                 close this session`;
+function dispatch(cmd,rest,arg){
+  const s=sess();
+  switch(cmd){
+    case '': break;
+    case 'help': print(HELP,'out');break;
+    case 'clear': s.lines=[];renderScreen();return;
+    case 'echo': print(arg,'out');break;
+    case 'pwd': print('/home/user'+(s.cwd==='~'?'':'/'+s.cwd.replace('~/','')),'out');break;
+    case 'cd': s.cwd=rest[0]?('~/'+rest[0]):'~';print('Changed directory to '+s.cwd,'sys');break;
+    case 'ls': print(s.files.join('  ')||'(empty)','out');break;
+    case 'mkdir': if(rest[0]){s.files.push(rest[0]+'/');print('Folder created.','sys');}break;
+    case 'touch': if(rest[0]){s.files.push(rest[0]);print('File created.','sys');}break;
+    case 'rm': s.files=s.files.filter(f=>f!==rest[0]);print('Removed (if existed).','sys');break;
+    case 'cat': print(s.files.includes(rest[0])?'(simulated contents of '+rest[0]+')':'cat: no such file','out');break;
+    case 'whoami': print('user','out');break;
+    case 'uname': print('Linux droid-terminal 6.1 aarch64 (Android compatibility layer)','out');break;
+    case 'date': print(new Date().toString(),'out');break;
+    case 'history': print(s.history.map((h,i)=>(i+1)+'  '+h).join('\n')||'(empty)','out');break;
+    case 'neofetch': print('Droid Terminal\n---------------\nOS: Android (web)\nShell: droidsh\nTheme: '+(document.documentElement.getAttribute('data-theme')||'light'),'out');break;
+    case 'about': print('Termicro - a Termux-style web terminal for Android, for testing before an APK build.','out');break;
+    case 'exit': closeSession(current);return;
+    case 'pkg': case 'apt': handlePkg(rest);break;
+    case 'git': handleGit(rest);break;
+    case 'javac': case 'java': print(rest.includes('-version')?'openjdk version "17.0.9"':'Usage: java -version (install openjdk-17 first)','out');break;
+    case 'gradle': print(rest.includes('-v')?'Gradle 8.5':'Running Gradle task... (simulated)','out');break;
+    case 'sdkmanager': print('platform-tools\nplatforms;android-34\nbuild-tools;34.0.0','out');break;
+    case 'build-apk':
+      progress('Running Gradle build',1800,()=>print('BUILD SUCCESSFUL\napp-release.apk generated (simulated) in ~/uploads/','sys'));
+      break;
+    default: print(cmd+': command not found (try "help")','err');
+  }
+}
+function runCmd(raw){
+  const s=sess();
+  if(raw.trim()){s.history.push(raw);s.hIdx=-1;}
+  print(s.cwd+'$ '+raw,'pr');
+  if(raw.trim().startsWith('-')&&raw.trim().length>1){handleAsk(raw.trim().slice(1).trim());return;}
+  const [cmd,...rest]=raw.trim().split(/\s+/);
+  const arg=rest.join(' ');
+  dispatch(cmd,rest,arg);
+}
+function handlePkg(rest){
+  const sub=rest[0],name=rest[1];
+  if(sub==='list'){print(Object.keys(pkgDB).map(k=>k+'  ('+pkgDB[k]+')').join('\n'),'out');return;}
+  if(sub==='install'&&name){
+    if(!pkgDB[name]){print('Package not found: '+name,'err');return;}
+    progress('Downloading '+name+' ('+pkgDB[name]+')',1500,()=>print(name+' installed successfully.','sys'));
+    return;
+  }
+  if(sub==='uninstall'&&name){print(name+' removed.','sys');return;}
+  if(sub==='update'){progress('Fetching package indexes',900,()=>print('All indexes up to date.','sys'));return;}
+  if(sub==='upgrade'){progress('Upgrading installed packages',1200,()=>print('All packages upgraded.','sys'));return;}
+  print('Usage: pkg [list|install|uninstall|update|upgrade] <name>','err');
+}
+function handleGit(rest){
+  const sub=rest[0];
+  if(sub==='clone'){progress('Cloning '+(rest[1]||'repo'),1300,()=>print('Repository cloned (simulated) into ~/'+(rest[1]?rest[1].split('/').pop():'repo'),'sys'));return;}
+  if(sub==='init'){print('Initialized empty Git repository.','sys');return;}
+  if(sub==='status'){print('On branch main\nnothing to commit, working tree clean (simulated)','out');return;}
+  print('Usage: git [clone|init|status]','err');
+}
+function tryAsAction(req){
+  const lower=req.toLowerCase().trim();
+  let m;
+  if((m=lower.match(/^(?:open|go to|go into|enter)\s+(?:the\s+|my\s+)?(.+?)\s*(?:folder|directory)?$/))){
+    return {cmd:'cd', rest:[m[1].trim()], arg:m[1].trim(), say:'cd '+m[1].trim()};
+  }
+  if((m=lower.match(/^(?:list|show|see what'?s in)\s+(?:the\s+|my\s+)?(.+?)\s*(?:folder|directory)?$/))){
+    return {chain:[['cd',[m[1].trim()]],['ls',[]]], say:'cd '+m[1].trim()+' && ls'};
+  }
+  if(lower==='list files'||lower==='show files'||lower==='what files are here'){
+    return {cmd:'ls', rest:[], arg:'', say:'ls'};
+  }
+  if((m=lower.match(/^(?:make|create)\s+(?:a\s+|the\s+)?(?:new\s+)?folder\s+(?:called\s+|named\s+)?(.+)$/))){
+    return {cmd:'mkdir', rest:[m[1].trim()], arg:m[1].trim(), say:'mkdir '+m[1].trim()};
+  }
+  if((m=lower.match(/^(?:make|create)\s+(?:a\s+|the\s+)?(?:new\s+)?file\s+(?:called\s+|named\s+)?(.+)$/))){
+    return {cmd:'touch', rest:[m[1].trim()], arg:m[1].trim(), say:'touch '+m[1].trim()};
+  }
+  if((m=lower.match(/^(?:delete|remove)\s+(?:the\s+|my\s+)?(.+?)\s*(?:folder|file|directory)?$/))){
+    return {cmd:'rm', rest:[m[1].trim()], arg:m[1].trim(), say:'rm '+m[1].trim()};
+  }
+  if((m=lower.match(/^(?:show|open|read|cat)\s+(?:the\s+|my\s+)?(.+?\.\w+)$/))){
+    return {cmd:'cat', rest:[m[1].trim()], arg:m[1].trim(), say:'cat '+m[1].trim()};
+  }
+  if(lower==='where am i'||lower==='current folder'||lower==='what folder am i in'){
+    return {cmd:'pwd', rest:[], arg:'', say:'pwd'};
+  }
+  if(lower.includes('what time')||lower==='current date'||lower==='what date is it'){
+    return {cmd:'date', rest:[], arg:'', say:'date'};
+  }
+  return null;
+}
+function handleAsk(req){
+  const action=tryAsAction(req);
+  if(action){
+    print('(interpreting as: '+action.say+')','sys');
+    if(action.chain){
+      action.chain.forEach(([c,r])=>dispatch(c,r,r.join(' ')));
+    } else {
+      dispatch(action.cmd, action.rest, action.arg);
+    }
+    return;
+  }
+  progress('Writing code for: '+req,1400,()=>{
+    const lower=req.toLowerCase();let lang='bash',code='';
+    if(lower.includes('python')){lang='python';code='#!/usr/bin/env python3\n# '+req+'\n\ndef main():\n    pass  # TODO: implement "'+req+'"\n\nif __name__ == "__main__":\n    main()';}
+    else if(lower.includes('java')&&!lower.includes('javascript')){lang='java';code='// '+req+'\npublic class Main {\n    public static void main(String[] args) {\n        // TODO: implement "'+req+'"\n    }\n}';}
+    else if(lower.includes('html')||lower.includes('web page')){lang='html';code='<!-- '+req+' -->\n<!DOCTYPE html>\n<html><body>\n<h1>TODO: '+req+'</h1>\n</body></html>';}
+    else if(lower.includes('node')||lower.includes('javascript')){lang='javascript';code='// '+req+'\nfunction main() {\n  // TODO: implement "'+req+'"\n}\nmain();';}
+    else if(lower.includes('gradle')){lang='gradle';code="// "+req+"\nplugins { id 'com.android.application' }\nandroid { /* TODO: configure for: "+req+" */ }";}
+    else {code='#!/bin/sh\n# '+req+'\necho "TODO: implement: '+req+'"';}
+    print('```'+lang+'\n'+code+'\n```','out');
+    sess().files.push('generated_'+Date.now()+'.'+(lang==='python'?'py':lang==='java'?'java':lang==='html'?'html':lang==='javascript'?'js':lang==='gradle'?'gradle':'sh'));
+    print('Saved to ~/'+s_lastFile(),'sys');
+  });
+}
+function s_lastFile(){return sess().files[sess().files.length-1];}
+document.getElementById('cmd').addEventListener('keydown',e=>{
+  if(e.key==='Enter'){const v=e.target.value;e.target.value='';runCmd(v);}
+  else if(e.key==='ArrowUp'){e.preventDefault();histNav(-1);}
+  else if(e.key==='ArrowDown'){e.preventDefault();histNav(1);}
+});
+newSession();
+</script>
+</body>
+</html>
